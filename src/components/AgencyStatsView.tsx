@@ -30,8 +30,10 @@ import {
   Users,
   CheckCircle2,
   Calendar,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { CarListing, Agency, AppUser } from '../types';
+import { downloadInventoryCsv } from '../utils/exportInventoryUtils';
 
 interface AgencyStatsViewProps {
   agency: Agency;
@@ -274,6 +276,21 @@ export const AgencyStatsView: React.FC<AgencyStatsViewProps> = ({
               Histórico
             </button>
           </div>
+
+          {/* Export CSV Button */}
+          <button
+            onClick={() =>
+              downloadInventoryCsv(filteredCars, {
+                delimiter: ';',
+                agency,
+              })
+            }
+            title="Exportar inventario y métricas filtradas a CSV / Excel"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs shadow-xs transition-colors cursor-pointer"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Exportar CSV ({filteredCars.length})</span>
+          </button>
         </div>
       </div>
 

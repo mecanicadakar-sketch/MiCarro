@@ -11,6 +11,8 @@ import {
   CurrencyCode,
   AppUser,
   SubscriptionAccessCode,
+  AgencyNotification,
+  PushNotificationSettings,
 } from '../types';
 import {
   INITIAL_AGENCIES,
@@ -23,6 +25,11 @@ import {
   INITIAL_USERS,
   INITIAL_ACCESS_CODES,
 } from '../data/mockData';
+import {
+  getStoredPushSettings,
+  savePushSettings,
+  triggerAgencyPushNotification,
+} from '../services/pushNotificationService';
 
 interface AppContextType {
   // Navigation & View
@@ -124,6 +131,11 @@ interface AppContextType {
   setFilters: React.Dispatch<React.SetStateAction<AppFilterState>>;
   resetFilters: () => void;
 
+  // Push Notifications Service & Settings
+  pushSettings: PushNotificationSettings;
+  updatePushSettings: (settings: Partial<PushNotificationSettings>) => void;
+  triggerPushNotification: (notification: AgencyNotification) => void;
+
   // Currency & Plan Pricing Helpers
   exchangeRateUsdToPyg: number;
   formatPrice: (amount: number, currency?: CurrencyCode) => string;
@@ -158,6 +170,8 @@ const INITIAL_FILTERS: AppFilterState = {
   maxYear: '',
   minPrice: '',
   maxPrice: '',
+  minMileage: '',
+  maxMileage: '',
   onlyFeatured: false,
   onlyFinancing: false,
   onlyTradeIn: false,
@@ -368,6 +382,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setComparedCarIds([]);
   };
 
+  // Push Notifications Settings & Service State
+  const [pushSettings, setPushSettings] = useState<PushNotificationSettings>(() => {
+    return getStoredPushSettings();
+  });
+
+  const updatePushSettings = (newSettings: Partial<PushNotificationSettings>) => {
+    setPushSettings((prev) => {
+      const updated = { ...prev, ...newSettings };
+      savePushSettings(updated);
+      return updated;
+    });
+  };
+
+  const triggerPushNotification = (notification: AgencyNotification) => {
+    triggerAgencyPushNotification(notification);
+  };
+
   const [filters, setFilters] = useState<AppFilterState>(INITIAL_FILTERS);
 
   // Sync to LocalStorage safely (with quota overflow protection)
@@ -570,7 +601,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currency === 'USD') {
       return `USD ${amount.toLocaleString('es-ES')}`;
     } else if (currency === 'PYG') {
-      return `₲ ${amount.toLocaleString('es-PY')}`;
+      return `Gs. ${amount.toLocaleString('es-PY')}`;
     } else if (currency === 'EUR') {
       return `${amount.toLocaleString('es-ES')} €`;
     } else if (currency === 'ARS') {
@@ -663,6 +694,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const openWhatsappForCar = (car: CarListing, customText?: string) => {
     incrementWhatsappInquiries(car.id);
     const link = generateWhatsappLink(car, customText);
+
+    // Auto-record Lead in CRM
+    const newLead: LeadInquiry = {
+      id: `lead-${Date.now()}`,
+      carId: car.id,
+      carTitle: `${car.make} ${car.model} ${car.version || ''} (${car.year})`,
+      agencyId: car.agencyId,
+      agencyName: car.agencyName,
+      clientName: 'Cliente Web / WhatsApp',
+      clientPhone: car.agencyWhatsapp || 'Consulta Directa',
+      channel: 'whatsapp',
+      message: customText || `Consulta directa por WhatsApp por ${car.make} ${car.model} (${car.year})`,
+      status: 'new',
+      assignedSellerId: car.createdBySellerId,
+      assignedSellerName: car.sellerName,
+      createdAt: new Date().toISOString(),
+    };
+    setLeads((prev) => [newLead, ...prev]);
+
+    // Dispatch Push Notification Alert to the Agency & Seller
+    const sellerTag = car.sellerName ? ` • Asignado a: ${car.sellerName}` : '';
+    const notif: AgencyNotification = {
+      id: `notif-wa-${Date.now()}`,
+      agencyId: car.agencyId,
+      type: 'whatsapp_inquiry',
+      title: `⚡ ¡Nueva Consulta por WhatsApp!`,
+      message: `Un comprador solicitó información sobre el ${car.make} ${car.model} (${car.year})${sellerTag}`,
+      clientName: 'Cliente Web / WhatsApp',
+      clientPhone: car.agencyWhatsapp || '+595 (Consulta Directa)',
+      clientWhatsapp: (car.agencyWhatsapp || '').replace(/[^0-9]/g, ''),
+      carId: car.id,
+      carTitle: `${car.make} ${car.model} ${car.year}`,
+      vehicleSummary: `${car.make} ${car.model} ${car.year} • ${car.currency} ${car.price.toLocaleString('es-ES')}`,
+      amountOrPrice: `${car.currency} ${car.price.toLocaleString('es-ES')}`,
+      photoUrl: car.photos?.[0],
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      priority: 'high',
+      assignedSellerId: car.createdBySellerId,
+      assignedSellerName: car.sellerName,
+      channel: 'whatsapp',
+    };
+    triggerAgencyPushNotification(notif);
+
     window.open(link, '_blank');
   };
 
@@ -790,6 +865,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       submittedAt: new Date().toISOString(),
     };
     setPrivateOffers((prev) => [newOffer, ...prev]);
+
+    // Dispatch Push Notification
+    const notif: AgencyNotification = {
+      id: `notif-offer-${Date.now()}`,
+      agencyId: offerData.preferredAgencyId || currentAgencyId || 'all',
+      type: 'private_seller',
+      title: `🚗 Particular ofrece vehículo: ${offerData.make} ${offerData.model} (${offerData.year})`,
+      message: `${offerData.contactName} ofrece ${offerData.make} ${offerData.model} en ${offerData.city}. Pretende: ${offerData.currency} ${offerData.expectedPrice.toLocaleString('es-ES')}`,
+      clientName: offerData.contactName,
+      clientPhone: offerData.contactPhone,
+      clientWhatsapp: (offerData.contactWhatsapp || offerData.contactPhone).replace(/[^0-9]/g, ''),
+      clientEmail: offerData.contactEmail,
+      offerId: newId,
+      vehicleSummary: `${offerData.make} ${offerData.model} (${offerData.year}) • ${offerData.mileage.toLocaleString('es-ES')} km`,
+      amountOrPrice: `${offerData.currency} ${offerData.expectedPrice.toLocaleString('es-ES')}`,
+      photoUrl: offerData.photos?.[0],
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      priority: 'high',
+      channel: 'trade_in',
+    };
+    triggerAgencyPushNotification(notif);
+
     return newId;
   };
 
@@ -1246,6 +1344,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         filters,
         setFilters,
         resetFilters,
+        pushSettings,
+        updatePushSettings,
+        triggerPushNotification,
         exchangeRateUsdToPyg,
         formatPrice,
         formatPlanPrice,

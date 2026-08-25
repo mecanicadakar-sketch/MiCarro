@@ -62,6 +62,12 @@ export interface Agency {
   cuitOrTaxId?: string; // RUC, CUIT or Tax ID
   bankInfo?: string; // Default Bank account / Alias for quotes
   defaultWarranty?: string; // Default warranty terms for quotes
+  defaultSellerName?: string;
+  defaultSellerPhone?: string;
+  defaultTransferFees?: number;
+  defaultMonthlyInterestRate?: number;
+  defaultInstallmentsCount?: number;
+  defaultQuoteNotes?: string;
   website?: string;
   verified: boolean;
   subscriptionPlanId: string;
@@ -261,8 +267,55 @@ export interface AppFilterState {
   maxYear: number | '';
   minPrice: number | '';
   maxPrice: number | '';
+  minMileage: number | '';
+  maxMileage: number | '';
   onlyFeatured: boolean;
   onlyFinancing: boolean;
   onlyTradeIn: boolean;
   sortBy: 'featured' | 'price_asc' | 'price_desc' | 'year_desc' | 'mileage_asc' | 'recent';
+}
+
+export type NotificationType =
+  | 'whatsapp_inquiry'
+  | 'quote_inquiry'
+  | 'financing_request'
+  | 'private_seller'
+  | 'test_drive_request'
+  | 'car_compare';
+
+export interface PushNotificationSettings {
+  browserPushEnabled: boolean;
+  soundEnabled: boolean;
+  soundTone: 'modern_chime' | 'subtle_bell' | 'marimba' | 'cash_register';
+  toastAlertsEnabled: boolean;
+  vibrateEnabled: boolean;
+  notifyOnWhatsappInquiry: boolean;
+  notifyOnQuoteInquiry: boolean;
+  notifyOnPrivateOffer: boolean;
+  notifyOnFinancingRequest: boolean;
+  sellerSpecificOnly: boolean;
+}
+
+export interface AgencyNotification {
+  id: string;
+  agencyId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  clientName: string;
+  clientPhone: string;
+  clientWhatsapp: string;
+  clientEmail?: string;
+  carId?: string;
+  carTitle?: string;
+  offerId?: string;
+  vehicleSummary?: string;
+  amountOrPrice?: string;
+  photoUrl?: string;
+  timestamp: string;
+  isRead: boolean;
+  priority?: 'high' | 'normal';
+  assignedSellerId?: string;
+  assignedSellerName?: string;
+  channel?: 'whatsapp' | 'web_quote' | 'trade_in' | 'form';
 }

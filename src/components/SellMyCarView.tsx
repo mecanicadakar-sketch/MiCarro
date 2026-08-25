@@ -19,6 +19,7 @@ import {
 import { Transmission, FuelType, CurrencyCode } from '../types';
 import { POPULAR_CAR_BRANDS } from './CarBrandIcons';
 import { getAllBrands, getModelsForBrand } from '../data/carBrandsData';
+import { formatNumberWithDots, parseNumberFromFormatted, getMillionsDescription } from '../utils/currencyUtils';
 
 export const SellMyCarView: React.FC = () => {
   const { agencies, addPrivateOffer, formatPrice, privateOffers } = useApp();
@@ -48,6 +49,7 @@ export const SellMyCarView: React.FC = () => {
   const [fuelType, setFuelType] = useState<FuelType>('Nafta/Gasolina');
   const [expectedPrice, setExpectedPrice] = useState<number>(14500);
   const [currency, setCurrency] = useState<CurrencyCode>('USD');
+  const [expectedPriceInputStr, setExpectedPriceInputStr] = useState<string>('14.500');
   const [conditionNotes, setConditionNotes] = useState(
     'Único dueño, service al día, cubiertas con 10.000 km, VTV vigente y sin deudas de patentes ni multas.'
   );
@@ -553,23 +555,101 @@ export const SellMyCarView: React.FC = () => {
                       <div className="flex gap-2">
                         <select
                           value={currency}
-                          onChange={(e) => setCurrency(e.target.value as any)}
-                          className="w-24 bg-slate-900 text-white rounded-xl p-2.5 border border-sky-500/30 text-xs font-bold focus:outline-none focus:border-sky-400"
+                          onChange={(e) => {
+                            const newCurr = e.target.value as CurrencyCode;
+                            if (newCurr === 'PYG' && currency === 'USD' && expectedPrice < 500000) {
+                              const converted = Math.round((expectedPrice * 7900) / 1000000) * 1000000 || 65000000;
+                              setExpectedPrice(converted);
+                              setExpectedPriceInputStr(formatNumberWithDots(converted));
+                            } else if (newCurr === 'USD' && currency === 'PYG' && expectedPrice >= 1000000) {
+                              const converted = Math.round(expectedPrice / 7900);
+                              setExpectedPrice(converted);
+                              setExpectedPriceInputStr(formatNumberWithDots(converted));
+                            } else {
+                              setExpectedPriceInputStr(formatNumberWithDots(expectedPrice));
+                            }
+                            setCurrency(newCurr);
+                          }}
+                          className="w-28 bg-slate-900 text-white rounded-xl p-2.5 border border-sky-500/30 text-xs font-bold focus:outline-none focus:border-sky-400"
                         >
                           <option value="USD" className="bg-slate-950">USD ($)</option>
-                          <option value="PYG" className="bg-slate-950">PYG (Gs.)</option>
+                          <option value="PYG" className="bg-slate-950">Gs. (PYG)</option>
                           <option value="ARS" className="bg-slate-950">ARS ($)</option>
                           <option value="EUR" className="bg-slate-950">EUR (€)</option>
                         </select>
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="numeric"
                           required
-                          min="1"
-                          value={expectedPrice}
-                          onChange={(e) => setExpectedPrice(Number(e.target.value))}
+                          placeholder={currency === 'PYG' ? 'Ej. 65.000.000' : 'Ej. 14.500'}
+                          value={expectedPriceInputStr}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const num = parseNumberFromFormatted(raw);
+                            setExpectedPrice(num);
+                            setExpectedPriceInputStr(raw === '' ? '' : formatNumberWithDots(num));
+                          }}
                           className="flex-1 bg-slate-900/90 text-white rounded-xl p-2.5 border border-sky-500/30 text-sm font-mono font-bold focus:outline-none focus:border-sky-400"
                         />
                       </div>
+
+                      {/* Helper para Guaraníes con formato de millones y 2 puntos */}
+                      {currency === 'PYG' && (
+                        <div className="mt-2 p-2.5 rounded-xl bg-sky-950/50 border border-sky-500/30 space-y-1.5">
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                            <span className="text-sky-300 font-bold flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 text-sky-400" />
+                              Unidad de Millón (2 puntos entre los 6 ceros):
+                            </span>
+                            <span className="font-mono font-black text-white bg-sky-900/80 px-2 py-0.5 rounded border border-sky-500/40 text-[11px]">
+                              {expectedPrice > 0 ? `Gs. ${formatNumberWithDots(expectedPrice)}` : 'Gs. 0'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-300">
+                            {expectedPrice >= 1_000_000
+                              ? `Valor: ${(expectedPrice / 1_000_000).toLocaleString('es-PY', { maximumFractionDigits: 2 })} Millones de Gs. (${formatNumberWithDots(expectedPrice)} Gs.)`
+                              : 'Podés escribir directamente con dos puntos (ej: 65.000.000) o sumar millones con un clic:'}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const n = (expectedPrice || 0) + 10_000_000;
+                                setExpectedPrice(n);
+                                setExpectedPriceInputStr(formatNumberWithDots(n));
+                              }}
+                              className="px-2 py-1 bg-sky-900/60 hover:bg-sky-800 text-sky-200 text-[11px] font-bold rounded-lg border border-sky-600/40 transition-colors"
+                            >
+                              +10 Millones
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const n = (expectedPrice || 0) + 50_000_000;
+                                setExpectedPrice(n);
+                                setExpectedPriceInputStr(formatNumberWithDots(n));
+                              }}
+                              className="px-2 py-1 bg-sky-900/60 hover:bg-sky-800 text-sky-200 text-[11px] font-bold rounded-lg border border-sky-600/40 transition-colors"
+                            >
+                              +50 Millones
+                            </button>
+                            <div className="h-3.5 w-px bg-sky-700/50 mx-1 hidden sm:block" />
+                            {[35000000, 50000000, 75000000, 110000000].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => {
+                                  setExpectedPrice(preset);
+                                  setExpectedPriceInputStr(formatNumberWithDots(preset));
+                                }}
+                                className="px-2 py-0.5 bg-slate-900 hover:bg-slate-850 text-slate-300 text-[11px] font-mono rounded border border-slate-700 transition-colors"
+                              >
+                                {formatNumberWithDots(preset)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex justify-between pt-4">

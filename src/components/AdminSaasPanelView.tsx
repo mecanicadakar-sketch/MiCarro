@@ -6,6 +6,7 @@ import {
   AgencyInvoice,
   Agency,
   CurrencyCode,
+  CarListing,
 } from '../types';
 import {
   ShieldCheck,
@@ -35,11 +36,16 @@ import {
   Upload,
   Activity,
   Users,
+  Search,
+  Filter,
+  Ban,
+  Eye,
 } from 'lucide-react';
 import { AdminAuthView } from './AdminAuthView';
 import { SubscriptionCodesManager } from './SubscriptionCodesManager';
 import { LiveActivityMonitor } from './LiveActivityMonitor';
 import { AgencyLogo } from './AgencyLogo';
+import { ConfirmationModal } from './ConfirmationModal';
 
 export const AdminSaasPanelView: React.FC = () => {
   const {
@@ -56,6 +62,7 @@ export const AdminSaasPanelView: React.FC = () => {
     updateAgency,
     addAgency,
     carListings,
+    deleteCarListing,
     formatPrice,
     formatPlanPrice,
     exchangeRateUsdToPyg,
@@ -67,7 +74,32 @@ export const AdminSaasPanelView: React.FC = () => {
     resetToSampleData,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'codes' | 'activity' | 'plans' | 'gateways' | 'invoices' | 'agencies' | 'backup'>('codes');
+  const [activeTab, setActiveTab] = useState<'codes' | 'activity' | 'plans' | 'gateways' | 'invoices' | 'agencies' | 'inventory' | 'backup'>('codes');
+
+  // Confirmation Modal State (for deleting cars, cancelling subscriptions, etc.)
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'warning' | 'info';
+    iconType?: 'trash' | 'cancel' | 'warning' | 'ban';
+    itemName?: string;
+    itemDetails?: string;
+    warningNote?: string;
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    description: '',
+    onConfirm: () => {},
+  });
+
+  // Global Inventory Management Filters
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryAgencyFilter, setInventoryAgencyFilter] = useState('all');
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState('all');
 
   // Editing Plan Modal / State
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
@@ -130,6 +162,75 @@ export const AdminSaasPanelView: React.FC = () => {
   const totalInvoicedThisMonth = invoices
     .filter((inv) => inv.status === 'paid')
     .reduce((sum, inv) => sum + inv.amount, 0);
+
+  // Handler for Deleting a Car with Confirmation Dialog Modal
+  const handleRequestDeleteCar = (car: CarListing) => {
+    const agency = agencies.find((a) => a.id === car.agencyId);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: '¿Eliminar auto del inventario?',
+      description: 'Esta acción dará de baja definitivamente el vehículo de la base de datos y del catálogo público de la plataforma.',
+      itemName: `${car.title} (${car.year})`,
+      itemDetails: `Concesionaria: ${agency?.name || 'Sede Central'} • Precio: ${formatPrice(car.price, car.currency)} • Km: ${car.mileage.toLocaleString('es-ES')} km`,
+      warningNote: 'El vehículo ya no estará disponible para cotizaciones ni consultas de compradores.',
+      confirmText: 'Sí, Eliminar Auto',
+      cancelText: 'Cancelar / Mantener',
+      variant: 'danger',
+      iconType: 'trash',
+      onConfirm: () => {
+        deleteCarListing(car.id);
+        setConfirmModalConfig((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
+  };
+
+  // Handler for Cancelling / Suspending an Agency Subscription with Confirmation Dialog Modal
+  const handleRequestCancelSubscription = (
+    agency: Agency,
+    newStatus: Agency['subscriptionStatus'] = 'cancelled'
+  ) => {
+    const plan = subscriptionPlans.find((p) => p.id === agency.subscriptionPlanId);
+    const agencyCars = carListings.filter((c) => c.agencyId === agency.id);
+
+    const isSuspending = newStatus === 'suspended';
+    const actionName = isSuspending ? 'Suspender' : 'Cancelar';
+
+    setConfirmModalConfig({
+      isOpen: true,
+      title: `¿${actionName} suscripción de ${agency.name}?`,
+      description: isSuspending
+        ? `Al suspender la suscripción, los vendedores no podrán acceder a cargar nuevos autos hasta regularizar la cuenta.`
+        : `Al cancelar la suscripción, la concesionaria perderá el acceso a la plataforma y todos sus vendedores quedarán bloqueados.`,
+      itemName: `Concesionaria: ${agency.name}`,
+      itemDetails: `Plan actual: ${plan?.name || 'Sin plan'} • Stock activo: ${agencyCars.length} autos • WhatsApp: ${agency.whatsappNumber}`,
+      warningNote: `⛔ Consecuencia: Todos los vendedores vinculados a esta concesionaria verán bloqueado su inicio de sesión en MiCarro.`,
+      confirmText: `Sí, ${actionName} Suscripción`,
+      cancelText: 'Mantener Activa',
+      variant: 'danger',
+      iconType: 'cancel',
+      onConfirm: () => {
+        updateAgency(agency.id, { subscriptionStatus: newStatus });
+        setConfirmModalConfig((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
+  };
+
+  // Filtered Global Inventory for the Inventory tab
+  const filteredGlobalCars = carListings.filter((car) => {
+    const matchesSearch =
+      inventorySearch === '' ||
+      car.title.toLowerCase().includes(inventorySearch.toLowerCase()) ||
+      car.make.toLowerCase().includes(inventorySearch.toLowerCase()) ||
+      car.model.toLowerCase().includes(inventorySearch.toLowerCase());
+
+    const matchesAgency =
+      inventoryAgencyFilter === 'all' || car.agencyId === inventoryAgencyFilter;
+
+    const matchesStatus =
+      inventoryStatusFilter === 'all' || car.status === inventoryStatusFilter;
+
+    return matchesSearch && matchesAgency && matchesStatus;
+  });
 
   const handleSavePlan = (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,14 +404,21 @@ export const AdminSaasPanelView: React.FC = () => {
           </p>
         </div>
 
-        <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveTab('inventory')}
+          className="bg-white border border-slate-200/90 hover:border-blue-300 rounded-2xl p-4 sm:p-5 shadow-sm text-left transition-all group active:scale-98"
+        >
           <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
-            <span className="font-semibold">Autos Catálogo</span>
-            <Car className="w-4 h-4 text-blue-600" />
+            <span className="font-semibold group-hover:text-blue-700 transition-colors">Autos Catálogo</span>
+            <Car className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
           </div>
           <p className="text-xl sm:text-2xl font-black text-slate-900 font-mono">{carListings.length}</p>
-          <p className="text-[10px] text-slate-500 mt-1">Inventario publicado</p>
-        </div>
+          <p className="text-[10px] text-blue-600 mt-1 font-semibold flex items-center gap-1">
+            <span>Gestionar inventario</span>
+            <span>&rarr;</span>
+          </p>
+        </button>
 
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-sm">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
@@ -358,6 +466,30 @@ export const AdminSaasPanelView: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('agencies')}
+          className={`py-3 px-4 flex items-center gap-2 border-b-2 transition-all shrink-0 rounded-t-xl ${
+            activeTab === 'agencies'
+              ? 'border-blue-700 text-blue-700 bg-blue-50/50'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          <span>Concesionarias ({agencies.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('inventory')}
+          className={`py-3 px-4 flex items-center gap-2 border-b-2 transition-all shrink-0 rounded-t-xl ${
+            activeTab === 'inventory'
+              ? 'border-blue-700 text-blue-700 bg-blue-50/50'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          }`}
+        >
+          <Car className="w-4 h-4" />
+          <span>Inventario Global ({carListings.length})</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('plans')}
           className={`py-3 px-4 flex items-center gap-2 border-b-2 transition-all shrink-0 rounded-t-xl ${
             activeTab === 'plans'
@@ -391,18 +523,6 @@ export const AdminSaasPanelView: React.FC = () => {
         >
           <Receipt className="w-4 h-4" />
           <span>Facturación ({invoices.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('agencies')}
-          className={`py-3 px-4 flex items-center gap-2 border-b-2 transition-all shrink-0 rounded-t-xl ${
-            activeTab === 'agencies'
-              ? 'border-blue-700 text-blue-700 bg-blue-50/50'
-              : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Building2 className="w-4 h-4" />
-          <span>Concesionarias ({agencies.length})</span>
         </button>
 
         <button
@@ -868,6 +988,7 @@ export const AdminSaasPanelView: React.FC = () => {
             {agencies.map((agency) => {
               const plan = subscriptionPlans.find((p) => p.id === agency.subscriptionPlanId);
               const agencyCars = carListings.filter((c) => c.agencyId === agency.id);
+              const isSubscriptionActive = agency.subscriptionStatus === 'active' || agency.subscriptionStatus === 'trial';
 
               return (
                 <div key={agency.id} className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
@@ -887,7 +1008,14 @@ export const AdminSaasPanelView: React.FC = () => {
                     <div className="flex flex-col items-end gap-1">
                       <select
                         value={agency.subscriptionStatus}
-                        onChange={(e) => updateAgency(agency.id, { subscriptionStatus: e.target.value as any })}
+                        onChange={(e) => {
+                          const newSt = e.target.value as Agency['subscriptionStatus'];
+                          if (newSt === 'cancelled' || newSt === 'suspended') {
+                            handleRequestCancelSubscription(agency, newSt);
+                          } else {
+                            updateAgency(agency.id, { subscriptionStatus: newSt });
+                          }
+                        }}
                         className={`text-xs font-bold rounded-xl px-2.5 py-1 border focus:outline-none cursor-pointer ${
                           agency.subscriptionStatus === 'active'
                             ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
@@ -905,7 +1033,7 @@ export const AdminSaasPanelView: React.FC = () => {
                         <option value="cancelled">⚪ Cancelada (Vendedores Bloqueados)</option>
                       </select>
                       <span className="text-[10px] text-slate-500">
-                        {agency.subscriptionStatus === 'active' || agency.subscriptionStatus === 'trial'
+                        {isSubscriptionActive
                           ? '✅ Vendedores autorizados a loguearse'
                           : '⛔ Logueo de vendedores bloqueado'}
                       </span>
@@ -930,10 +1058,262 @@ export const AdminSaasPanelView: React.FC = () => {
                       <p className="font-bold text-blue-700 font-mono">{agency.whatsappNumber}</p>
                     </div>
                   </div>
+
+                  {/* Actions on Agency Card */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInventoryAgencyFilter(agency.id);
+                        setActiveTab('inventory');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Car className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Ver Stock ({agencyCars.length})</span>
+                    </button>
+
+                    {isSubscriptionActive ? (
+                      <button
+                        type="button"
+                        onClick={() => handleRequestCancelSubscription(agency, 'cancelled')}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold flex items-center gap-1.5 transition-colors"
+                        title="Abrir confirmación para cancelar suscripción"
+                      >
+                        <Ban className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Cancelar Suscripción</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => updateAgency(agency.id, { subscriptionStatus: 'active' })}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Reactivar Suscripción</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* TAB: GLOBAL INVENTORY MANAGEMENT & CAR DELETION */}
+      {activeTab === 'inventory' && (
+        <div className="space-y-4 animate-fadeIn">
+          {/* Header */}
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-sm">
+            <div>
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Car className="w-4 h-4 text-blue-700" />
+                <span>Inventario Global de Vehículos ({carListings.length} en plataforma)</span>
+              </h3>
+              <p className="text-slate-500 mt-0.5">
+                Panel maestro de supervisión y eliminación controlada de vehículos publicados por concesionarias.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-3 py-1 bg-blue-50 text-blue-800 border border-blue-200 rounded-xl font-bold font-mono">
+                {filteredGlobalCars.length} vehículos filtrados
+              </span>
+            </div>
+          </div>
+
+          {/* Search & Filter Bar */}
+          <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3 text-xs shadow-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Text Search */}
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar marca, modelo o versión..."
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white"
+                />
+              </div>
+
+              {/* Agency Filter */}
+              <div>
+                <select
+                  value={inventoryAgencyFilter}
+                  onChange={(e) => setInventoryAgencyFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-blue-600"
+                >
+                  <option value="all">🏢 Todas las Concesionarias ({agencies.length})</option>
+                  {agencies.map((a) => {
+                    const count = carListings.filter((c) => c.agencyId === a.id).length;
+                    return (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({count} autos)
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {/* Status Filter */}
+              <div>
+                <select
+                  value={inventoryStatusFilter}
+                  onChange={(e) => setInventoryStatusFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-blue-600"
+                >
+                  <option value="all">Todos los Estados</option>
+                  <option value="available">🟢 Disponible</option>
+                  <option value="reserved">🟣 Reservado</option>
+                  <option value="sold">🔴 Vendido</option>
+                  <option value="draft">⚪ Borrador</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Active filters reset */}
+            {(inventorySearch || inventoryAgencyFilter !== 'all' || inventoryStatusFilter !== 'all') && (
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                <span className="text-slate-500">Filtros aplicados</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInventorySearch('');
+                    setInventoryAgencyFilter('all');
+                    setInventoryStatusFilter('all');
+                  }}
+                  className="text-blue-700 font-bold hover:underline"
+                >
+                  Restablecer filtros
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Cars List Table */}
+          {filteredGlobalCars.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-3 shadow-sm">
+              <Car className="w-12 h-12 text-slate-300 mx-auto" />
+              <h4 className="text-base font-bold text-slate-800">No se encontraron autos</h4>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                No hay vehículos que coincidan con los filtros seleccionados de búsqueda o concesionaria.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-50 text-slate-600 uppercase font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="p-3.5">Vehículo</th>
+                      <th className="p-3.5">Concesionaria</th>
+                      <th className="p-3.5">Precio</th>
+                      <th className="p-3.5">Kilometraje</th>
+                      <th className="p-3.5">Estado</th>
+                      <th className="p-3.5">Interacciones</th>
+                      <th className="p-3.5 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredGlobalCars.map((car) => {
+                      const agency = agencies.find((a) => a.id === car.agencyId);
+                      return (
+                        <tr key={car.id} className="hover:bg-blue-50/30 transition-colors">
+                          {/* Vehicle Photo & Title */}
+                          <td className="p-3.5">
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={car.images?.[0] || 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&q=80&w=400'}
+                                alt={car.title}
+                                className="w-12 h-10 rounded-xl object-cover border border-slate-200 shrink-0"
+                              />
+                              <div>
+                                <h4 className="font-bold text-slate-900 text-xs line-clamp-1">{car.title}</h4>
+                                <span className="text-[11px] text-slate-500">
+                                  {car.year} • {car.transmission} • {car.fuelType}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Agency */}
+                          <td className="p-3.5">
+                            <span className="font-semibold text-slate-800 block">
+                              {agency?.name || 'Sede Central'}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {agency?.city || 'Paraguay'}
+                            </span>
+                          </td>
+
+                          {/* Price */}
+                          <td className="p-3.5">
+                            <span className="font-mono font-bold text-slate-900 block">
+                              {formatPrice(car.price, car.currency)}
+                            </span>
+                            {car.currency === 'USD' && (
+                              <span className="text-[10px] text-emerald-700 font-mono">
+                                ₲ {Math.round(car.price * exchangeRateUsdToPyg).toLocaleString('es-PY')}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Mileage */}
+                          <td className="p-3.5 font-mono text-slate-600">
+                            {car.mileage.toLocaleString('es-ES')} km
+                          </td>
+
+                          {/* Status */}
+                          <td className="p-3.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                car.status === 'available'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : car.status === 'reserved'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : car.status === 'sold'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}
+                            >
+                              {car.status === 'available'
+                                ? 'Disponible'
+                                : car.status === 'reserved'
+                                ? 'Reservado'
+                                : car.status === 'sold'
+                                ? 'Vendido'
+                                : 'Borrador'}
+                            </span>
+                          </td>
+
+                          {/* Views & Inquiries */}
+                          <td className="p-3.5 text-slate-500 text-[11px] font-mono">
+                            <div>👁️ {car.viewsCount || 0} vistas</div>
+                            <div>💬 {car.whatsappInquiriesCount || 0} chats</div>
+                          </td>
+
+                          {/* Delete Button with Confirmation Dialog */}
+                          <td className="p-3.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleRequestDeleteCar(car)}
+                              className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1.5 ml-auto transition-colors active:scale-98 shadow-xs"
+                              title={`Eliminar ${car.title} con confirmación previa`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              <span>Eliminar</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1142,8 +1522,10 @@ export const AdminSaasPanelView: React.FC = () => {
                     onChange={(e) => setNewInvoice({ ...newInvoice, currency: e.target.value as CurrencyCode })}
                     className="w-full bg-slate-50 text-slate-900 font-bold rounded-xl p-2.5 border border-slate-200"
                   >
-                    <option value="PYG">PYG (₲ Guaraníes)</option>
+                    <option value="PYG">PYG (Gs. Guaraníes)</option>
                     <option value="USD">USD ($ Dólares)</option>
+                    <option value="ARS">ARS ($ Pesos Arg.)</option>
+                    <option value="EUR">EUR (€ Euros)</option>
                   </select>
                 </div>
 
@@ -1265,6 +1647,22 @@ export const AdminSaasPanelView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* CONFIRMATION MODAL FOR DESTRUCTIVE ACTIONS */}
+      <ConfirmationModal
+        isOpen={confirmModalConfig.isOpen}
+        onClose={() => setConfirmModalConfig((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModalConfig.onConfirm}
+        title={confirmModalConfig.title}
+        description={confirmModalConfig.description}
+        confirmText={confirmModalConfig.confirmText}
+        cancelText={confirmModalConfig.cancelText}
+        variant={confirmModalConfig.variant}
+        iconType={confirmModalConfig.iconType}
+        itemName={confirmModalConfig.itemName}
+        itemDetails={confirmModalConfig.itemDetails}
+        warningNote={confirmModalConfig.warningNote}
+      />
     </div>
   );
 };

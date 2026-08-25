@@ -24,6 +24,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { getAllBrands, getModelsForBrand } from '../data/carBrandsData';
+import { formatNumberWithDots, parseNumberFromFormatted, getMillionsDescription } from '../utils/currencyUtils';
 
 interface CarFormModalProps {
   isOpen?: boolean;
@@ -75,6 +76,9 @@ export const CarFormModal: React.FC<CarFormModalProps> = ({
   const [mileage, setMileage] = useState<number>(targetInitialCar?.mileage || 25000);
   const [price, setPrice] = useState<number>(targetInitialCar?.price || 38000);
   const [currency, setCurrency] = useState<CurrencyCode>(targetInitialCar?.currency || 'USD');
+  const [priceInputStr, setPriceInputStr] = useState<string>(
+    targetInitialCar?.price ? formatNumberWithDots(targetInitialCar.price) : '38.000'
+  );
   const [condition, setCondition] = useState<CarCondition>(targetInitialCar?.condition || 'Usado');
   const [transmission, setTransmission] = useState<Transmission>(targetInitialCar?.transmission || 'Automática');
   const [fuelType, setFuelType] = useState<FuelType>(targetInitialCar?.fuelType || 'Diésel');
@@ -133,6 +137,7 @@ export const CarFormModal: React.FC<CarFormModalProps> = ({
       setMileage(targetInitialCar.mileage);
       setPrice(targetInitialCar.price);
       setCurrency(targetInitialCar.currency);
+      setPriceInputStr(formatNumberWithDots(targetInitialCar.price));
       setCondition(targetInitialCar.condition);
       setTransmission(targetInitialCar.transmission);
       setFuelType(targetInitialCar.fuelType);
@@ -787,20 +792,40 @@ export const CarFormModal: React.FC<CarFormModalProps> = ({
                 <div className="flex gap-2">
                   <select
                     value={currency}
-                    onChange={(e) => setCurrency(e.target.value as CurrencyCode)}
-                    className="w-24 bg-slate-900 text-white rounded-xl p-2.5 border border-slate-700 text-xs font-bold focus:outline-none focus:border-amber-500"
+                    onChange={(e) => {
+                      const newCurr = e.target.value as CurrencyCode;
+                      if (newCurr === 'PYG' && currency === 'USD' && price < 500000) {
+                        const converted = Math.round((price * 7900) / 1000000) * 1000000 || 85000000;
+                        setPrice(converted);
+                        setPriceInputStr(formatNumberWithDots(converted));
+                      } else if (newCurr === 'USD' && currency === 'PYG' && price >= 1000000) {
+                        const converted = Math.round(price / 7900);
+                        setPrice(converted);
+                        setPriceInputStr(formatNumberWithDots(converted));
+                      } else {
+                        setPriceInputStr(formatNumberWithDots(price));
+                      }
+                      setCurrency(newCurr);
+                    }}
+                    className="w-28 bg-slate-900 text-white rounded-xl p-2.5 border border-slate-700 text-xs font-bold focus:outline-none focus:border-amber-500"
                   >
                     <option value="USD">USD ($)</option>
+                    <option value="PYG">Gs. (PYG)</option>
                     <option value="ARS">ARS ($)</option>
                     <option value="EUR">EUR (€)</option>
                   </select>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
                     required
-                    min="1"
-                    placeholder="Ej. 35000"
-                    value={price}
-                    onChange={(e) => setPrice(Number(e.target.value))}
+                    placeholder={currency === 'PYG' ? 'Ej. 85.000.000' : 'Ej. 35.000'}
+                    value={priceInputStr}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const num = parseNumberFromFormatted(raw);
+                      setPrice(num);
+                      setPriceInputStr(raw === '' ? '' : formatNumberWithDots(num));
+                    }}
                     className="flex-1 bg-slate-900 text-white rounded-xl p-2.5 border border-slate-700 text-sm font-mono font-bold focus:outline-none focus:border-amber-500"
                   />
                 </div>
@@ -817,6 +842,76 @@ export const CarFormModal: React.FC<CarFormModalProps> = ({
                 />
               </div>
             </div>
+
+            {/* Helper para Guaraníes con formato de millones y 2 puntos entre los 6 ceros */}
+            {currency === 'PYG' && (
+              <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
+                  <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                    Unidad de Millón (2 puntos entre los 6 ceros):
+                  </span>
+                  <span className="font-mono font-black text-white bg-emerald-900/80 px-2.5 py-1 rounded-lg border border-emerald-500/40 text-xs">
+                    {price > 0 ? `Gs. ${formatNumberWithDots(price)}` : 'Gs. 0'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  {price >= 1_000_000
+                    ? `Valor actual: ${(price / 1_000_000).toLocaleString('es-PY', { maximumFractionDigits: 2 })} Millones de Guaraníes (con dos puntos: ${formatNumberWithDots(price)} Gs.)`
+                    : 'Podés escribir directamente con o sin puntos (ej: 85.000.000 o 85000000), o sumar millones rápidamente:'}
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const n = (price || 0) + 10_000_000;
+                      setPrice(n);
+                      setPriceInputStr(formatNumberWithDots(n));
+                    }}
+                    className="px-2.5 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 text-[11px] font-bold rounded-lg border border-emerald-600/40 transition-colors"
+                  >
+                    +10 Millones
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const n = (price || 0) + 50_000_000;
+                      setPrice(n);
+                      setPriceInputStr(formatNumberWithDots(n));
+                    }}
+                    className="px-2.5 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 text-[11px] font-bold rounded-lg border border-emerald-600/40 transition-colors"
+                  >
+                    +50 Millones
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const n = (price || 0) + 100_000_000;
+                      setPrice(n);
+                      setPriceInputStr(formatNumberWithDots(n));
+                    }}
+                    className="px-2.5 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 text-[11px] font-bold rounded-lg border border-emerald-600/40 transition-colors"
+                  >
+                    +100 Millones
+                  </button>
+                  <div className="h-4 w-px bg-emerald-700/50 mx-1 hidden sm:block" />
+                  <span className="text-[10px] text-slate-400 font-semibold hidden md:inline">Comunes:</span>
+                  {[65000000, 85000000, 120000000, 180000000, 250000000].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setPrice(preset);
+                        setPriceInputStr(formatNumberWithDots(preset));
+                      }}
+                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-mono font-semibold rounded-lg border border-slate-700 transition-colors"
+                    >
+                      {formatNumberWithDots(preset)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Checkboxes: Trade-in & Financing */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800 text-xs">

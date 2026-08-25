@@ -25,6 +25,7 @@ import {
   DollarSign,
   Calculator,
   FileText,
+  GitCompare,
 } from 'lucide-react';
 
 interface CarDetailModalProps {
@@ -34,7 +35,15 @@ interface CarDetailModalProps {
 }
 
 export const CarDetailModal: React.FC<CarDetailModalProps> = ({ car, onClose, onEditCar }) => {
-  const { formatPrice, openWhatsappForCar, generateWhatsappLink, currentAgency } = useApp();
+  const {
+    formatPrice,
+    openWhatsappForCar,
+    generateWhatsappLink,
+    currentAgency,
+    comparedCarIds,
+    toggleCompareCar,
+    setIsCompareModalOpen,
+  } = useApp();
 
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);
   const [selectedTab, setSelectedTab] = useState<'specs' | 'financing' | 'tradein'>('specs');
@@ -100,6 +109,19 @@ export const CarDetailModal: React.FC<CarDetailModalProps> = ({ car, onClose, on
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => toggleCompareCar(car.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                comparedCarIds.includes(car.id)
+                  ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-700'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+              }`}
+              title="Comparar especificaciones técnicas con otros autos"
+            >
+              <GitCompare className="w-3.5 h-3.5" />
+              <span>{comparedCarIds.includes(car.id) ? 'En Comparativa' : 'Comparar'}</span>
+            </button>
+
             <button
               onClick={() => setIsQuoteModalOpen(true)}
               className="px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-700 hover:bg-blue-800 text-white shadow-sm flex items-center gap-1.5 transition-all active:scale-98"

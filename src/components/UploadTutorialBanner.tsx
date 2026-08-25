@@ -61,9 +61,9 @@ const STEPS: TutorialStep[] = [
   {
     id: 3,
     title: 'Precio y Moneda',
-    subtitle: 'Fijación en USD $ o Guaraníes ₲',
+    subtitle: 'Fijación en USD $ o Guaraníes (Gs.)',
     description:
-      'Establece el precio de venta en Dólares americanos o Guaraníes. La plataforma calcula automáticamente la cotización y permite destacar promociones.',
+      'Establece el precio de venta en Dólares americanos (USD) o Guaraníes (Gs.). La plataforma formatea automáticamente la cotización y permite destacar financiación o permutas.',
     icon: DollarSign,
     color: 'from-emerald-600 to-teal-600',
     badgeBg: 'bg-emerald-100 text-emerald-800 border-emerald-200',

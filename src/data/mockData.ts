@@ -538,16 +538,11 @@ export const INITIAL_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
 export const INITIAL_PAYMENT_GATEWAYS: PaymentGatewayConfig[] = [
   {
     id: 'gateway-sipap',
-    name: 'Transferencia Bancaria Directa (CBU / Alias)',
+    name: 'Transferencia Bancaria Directa (SIPAP / CBU / Alias)',
     type: 'bank_transfer',
     isEnabled: true,
-    accountHolder: 'Camila Ayelen Torres',
-    bankName: 'Banco Itau',
-    accountNumber: '620011158',
-    cbuOrAlias: '7226273',
-    cuitOrTaxId: '7.226.273-7',
     currencyAccepted: 'Guaraníes (PYG ₲) y Dólares (USD $)',
-    instructions: 'Enviar comprobante por WhatsApp al +595 975 635 770 con el número de factura para habilitación inmediata.',
+    instructions: 'Solicitá el Alias / CBU actualizado para transferencias y enviá tu comprobante por WhatsApp o llamada al +595 975 635 770 para activación inmediata.',
   },
   {
     id: 'gateway-cards',
@@ -563,7 +558,6 @@ export const INITIAL_PAYMENT_GATEWAYS: PaymentGatewayConfig[] = [
     name: 'Cobro Presencial en Sede',
     type: 'cash',
     isEnabled: true,
-    accountHolder: 'Camila Ayelen Torres',
     locationOrOffice: 'Av. Santa Teresa y Aviadores del Chaco, Asunción, Paraguay',
     currencyAccepted: 'Efectivo en Guaraníes (₲) o Dólares (USD)',
     instructions: 'Cobro presencial en Sede o recepción en showroom con factura oficial con timbrado fiscal.',
@@ -573,10 +567,9 @@ export const INITIAL_PAYMENT_GATEWAYS: PaymentGatewayConfig[] = [
     name: 'Billeteras Electrónicas (Tigo Money / Personal Pay)',
     type: 'billetera',
     isEnabled: true,
-    accountNumber: 'Línea de Giros: +595 975 635 770',
-    accountHolder: 'Camila Ayelen Torres',
+    accountNumber: '+595 975 635 770',
     currencyAccepted: 'Guaraníes (PYG)',
-    instructions: 'Giro o transferencia directa entre billeteras móviles sin comisión adicional.',
+    instructions: 'Giro o transferencia directa entre billeteras móviles al +595 975 635 770 sin comisión adicional.',
   },
 ];
 

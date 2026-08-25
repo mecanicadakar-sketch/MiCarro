@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { CarListing, Agency } from '../types';
+import { CarListing, Agency, CurrencyCode } from '../types';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
@@ -33,14 +33,54 @@ import {
   ImageIcon,
   Save,
   Check,
+  MessageCircle,
 } from 'lucide-react';
 import { AgencyLogo } from './AgencyLogo';
+import { formatNumberWithDots, parseNumberFromFormatted, getMillionsDescription } from '../utils/currencyUtils';
 
 interface CarQuotePdfModalProps {
   car: CarListing | null;
   isOpen: boolean;
   onClose: () => void;
 }
+
+// LocalStorage Persistence Helper per Agency
+const getAgencyLocalStorageKey = (agencyId: string) => `car_quote_agency_settings_${agencyId}`;
+
+interface SavedAgencyPdfConfig {
+  companyName: string;
+  companyLogo: string;
+  companyRuc: string;
+  companyAddress: string;
+  companyCity: string;
+  companyPhone: string;
+  companyEmail: string;
+  companyWhatsapp: string;
+  sellerName?: string;
+  sellerPhone?: string;
+  warrantyText?: string;
+  bankInfo?: string;
+  notes?: string;
+  transferFees?: number;
+  includeTransferFees?: boolean;
+  monthlyInterestRate?: number;
+  installmentsCount?: number;
+  enableFinancing?: boolean;
+  lastSavedAt?: string;
+}
+
+const loadSavedAgencyConfig = (ag: Agency): SavedAgencyPdfConfig | null => {
+  if (!ag || !ag.id) return null;
+  try {
+    const raw = localStorage.getItem(getAgencyLocalStorageKey(ag.id));
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Error loading agency quote settings from localStorage:', e);
+  }
+  return null;
+};
 
 export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen, onClose }) => {
   const { agencies, currentAgencyId, currentUser, formatPrice, updateAgency } = useApp();
@@ -78,36 +118,20 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
       createdAt: '2026-01-01',
     };
 
+  // Initial config load from localStorage (if exists)
+  const initialCached = loadSavedAgencyConfig(agency);
+
   // Editable Dealership / Company Profile States
-  const [companyName, setCompanyName] = useState(agency.name);
-  const [companyLogo, setCompanyLogo] = useState(agency.logoUrl);
-  const [companyRuc, setCompanyRuc] = useState(agency.cuitOrTaxId || '7.226.273-7');
-  const [companyAddress, setCompanyAddress] = useState(agency.address);
-  const [companyCity, setCompanyCity] = useState(agency.city);
-  const [companyPhone, setCompanyPhone] = useState(agency.phone);
-  const [companyEmail, setCompanyEmail] = useState(agency.email);
-  const [companyWhatsapp, setCompanyWhatsapp] = useState(agency.whatsappNumber);
+  const [companyName, setCompanyName] = useState(initialCached?.companyName || agency.name);
+  const [companyLogo, setCompanyLogo] = useState(initialCached?.companyLogo || agency.logoUrl);
+  const [companyRuc, setCompanyRuc] = useState(initialCached?.companyRuc || agency.cuitOrTaxId || '7.226.273-7');
+  const [companyAddress, setCompanyAddress] = useState(initialCached?.companyAddress || agency.address);
+  const [companyCity, setCompanyCity] = useState(initialCached?.companyCity || agency.city);
+  const [companyPhone, setCompanyPhone] = useState(initialCached?.companyPhone || agency.phone);
+  const [companyEmail, setCompanyEmail] = useState(initialCached?.companyEmail || agency.email);
+  const [companyWhatsapp, setCompanyWhatsapp] = useState(initialCached?.companyWhatsapp || agency.whatsappNumber);
   const [companySavedSuccess, setCompanySavedSuccess] = useState(false);
-
-  // Sync with agency on change
-  useEffect(() => {
-    setCompanyName(agency.name);
-    setCompanyLogo(agency.logoUrl);
-    setCompanyRuc(agency.cuitOrTaxId || '7.226.273-7');
-    setCompanyAddress(agency.address);
-    setCompanyCity(agency.city);
-    setCompanyPhone(agency.phone);
-    setCompanyEmail(agency.email);
-    setCompanyWhatsapp(agency.whatsappNumber);
-  }, [agency.id, agency.name, agency.logoUrl]);
-
-  // Unique quote serial
-  const quoteNumber = useRef(`COT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`).current;
-  const issueDateFormatted = new Date().toLocaleDateString('es-ES', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-  });
+  const [lastAutoSavedTime, setLastAutoSavedTime] = useState<string | null>(initialCached?.lastSavedAt || null);
 
   // Expiration date (Default: 7 days)
   const defaultValidDate = new Date();
@@ -120,21 +144,32 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
   const [clientEmail, setClientEmail] = useState('mariano.fernandez@gmail.com');
   const [clientDoc, setClientDoc] = useState('4.890.123');
 
-  const [sellerName, setSellerName] = useState(currentUser?.name || 'Juan Pérez (Asesor Comercial)');
-  const [sellerPhone, setSellerPhone] = useState(currentUser?.phone || companyPhone);
+  const [sellerName, setSellerName] = useState(
+    initialCached?.sellerName || agency.defaultSellerName || currentUser?.name || 'Juan Pérez (Asesor Comercial)'
+  );
+  const [sellerPhone, setSellerPhone] = useState(
+    initialCached?.sellerPhone || agency.defaultSellerPhone || currentUser?.phone || agency.phone
+  );
 
   const [customPrice, setCustomPrice] = useState<number>(car?.price || 0);
+  const [quoteCurrency, setQuoteCurrency] = useState<CurrencyCode>(car?.currency || 'USD');
   const [discountAmount, setDiscountAmount] = useState<number>(0);
-  const [transferFees, setTransferFees] = useState<number>(550);
-  const [includeTransferFees, setIncludeTransferFees] = useState(true);
+  const [transferFees, setTransferFees] = useState<number>(
+    initialCached?.transferFees ?? agency.defaultTransferFees ?? 550
+  );
+  const [includeTransferFees, setIncludeTransferFees] = useState(initialCached?.includeTransferFees ?? true);
 
   // Financing options
-  const [enableFinancing, setEnableFinancing] = useState(true);
+  const [enableFinancing, setEnableFinancing] = useState(initialCached?.enableFinancing ?? true);
   const [downPaymentAmount, setDownPaymentAmount] = useState<number>(
     car ? Math.round(car.price * 0.35) : 5000
   );
-  const [installmentsCount, setInstallmentsCount] = useState<number>(24);
-  const [monthlyInterestRate, setMonthlyInterestRate] = useState<number>(2.5);
+  const [installmentsCount, setInstallmentsCount] = useState<number>(
+    initialCached?.installmentsCount ?? agency.defaultInstallmentsCount ?? 24
+  );
+  const [monthlyInterestRate, setMonthlyInterestRate] = useState<number>(
+    initialCached?.monthlyInterestRate ?? agency.defaultMonthlyInterestRate ?? 2.5
+  );
 
   // Trade-in vehicle
   const [enableTradeIn, setEnableTradeIn] = useState(false);
@@ -144,11 +179,142 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
 
   // Additional Commercial terms
   const [validUntilDate, setValidUntilDate] = useState(defaultValidDateStr);
-  const [warrantyText, setWarrantyText] = useState(agency.defaultWarranty || 'Garantía mecánica escrita de 6 meses o 10.000 km (motor y caja).');
-  const [bankInfo, setBankInfo] = useState(agency.bankInfo || 'Banco Itaú / Continental • Cta Cte Gs: 620011158 • Alias SIPAP: 7226273 • Titular: Agencia Demo');
-  const [notes, setNotes] = useState(
-    'Vehículo peritado con chequeo de 100 puntos mecánicos. Documentación al día y listo para transferir en el acto.'
+  const [warrantyText, setWarrantyText] = useState(
+    initialCached?.warrantyText ||
+      agency.defaultWarranty ||
+      'Garantía mecánica escrita de 6 meses o 10.000 km (motor y caja).'
   );
+  const [bankInfo, setBankInfo] = useState(
+    initialCached?.bankInfo ||
+      agency.bankInfo ||
+      'Banco Itaú / Continental • Cta Cte Gs: 620011158 • Alias SIPAP: 7226273 • Titular: Agencia Demo'
+  );
+  const [notes, setNotes] = useState(
+    initialCached?.notes ||
+      agency.defaultQuoteNotes ||
+      'Vehículo peritado con chequeo de 100 puntos mecánicos. Documentación al día y listo para transferir en el acto.'
+  );
+
+  // Sync with agency / localStorage when agency changes
+  useEffect(() => {
+    if (!agency?.id) return;
+    const cached = loadSavedAgencyConfig(agency);
+    if (cached) {
+      setCompanyName(cached.companyName || agency.name);
+      setCompanyLogo(cached.companyLogo || agency.logoUrl);
+      setCompanyRuc(cached.companyRuc || agency.cuitOrTaxId || '7.226.273-7');
+      setCompanyAddress(cached.companyAddress || agency.address);
+      setCompanyCity(cached.companyCity || agency.city);
+      setCompanyPhone(cached.companyPhone || agency.phone);
+      setCompanyEmail(cached.companyEmail || agency.email);
+      setCompanyWhatsapp(cached.companyWhatsapp || agency.whatsappNumber);
+      if (cached.bankInfo) setBankInfo(cached.bankInfo);
+      if (cached.warrantyText) setWarrantyText(cached.warrantyText);
+      if (cached.sellerName) setSellerName(cached.sellerName);
+      if (cached.sellerPhone) setSellerPhone(cached.sellerPhone);
+      if (cached.transferFees !== undefined) setTransferFees(cached.transferFees);
+      if (cached.includeTransferFees !== undefined) setIncludeTransferFees(cached.includeTransferFees);
+      if (cached.installmentsCount !== undefined) setInstallmentsCount(cached.installmentsCount);
+      if (cached.monthlyInterestRate !== undefined) setMonthlyInterestRate(cached.monthlyInterestRate);
+      if (cached.enableFinancing !== undefined) setEnableFinancing(cached.enableFinancing);
+      if (cached.notes) setNotes(cached.notes);
+      if (cached.lastSavedAt) setLastAutoSavedTime(cached.lastSavedAt);
+    } else {
+      setCompanyName(agency.name);
+      setCompanyLogo(agency.logoUrl);
+      setCompanyRuc(agency.cuitOrTaxId || '7.226.273-7');
+      setCompanyAddress(agency.address);
+      setCompanyCity(agency.city);
+      setCompanyPhone(agency.phone);
+      setCompanyEmail(agency.email);
+      setCompanyWhatsapp(agency.whatsappNumber);
+      if (agency.bankInfo) setBankInfo(agency.bankInfo);
+      if (agency.defaultWarranty) setWarrantyText(agency.defaultWarranty);
+      if (agency.defaultSellerName) setSellerName(agency.defaultSellerName);
+      if (agency.defaultSellerPhone) setSellerPhone(agency.defaultSellerPhone);
+      if (agency.defaultTransferFees !== undefined) setTransferFees(agency.defaultTransferFees);
+      if (agency.defaultInstallmentsCount !== undefined) setInstallmentsCount(agency.defaultInstallmentsCount);
+      if (agency.defaultMonthlyInterestRate !== undefined) setMonthlyInterestRate(agency.defaultMonthlyInterestRate);
+      if (agency.defaultQuoteNotes) setNotes(agency.defaultQuoteNotes);
+    }
+  }, [agency.id, agency.name, agency.logoUrl]);
+
+  // Automatic localStorage persistence per agency on any template modification
+  useEffect(() => {
+    if (!agency?.id || !isOpen) return;
+
+    const timer = setTimeout(() => {
+      const now = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+      const payload: SavedAgencyPdfConfig = {
+        companyName: companyName.trim(),
+        companyLogo,
+        companyRuc: companyRuc.trim(),
+        companyAddress: companyAddress.trim(),
+        companyCity: companyCity.trim(),
+        companyPhone: companyPhone.trim(),
+        companyEmail: companyEmail.trim(),
+        companyWhatsapp: companyWhatsapp.trim(),
+        sellerName: sellerName.trim(),
+        sellerPhone: sellerPhone.trim(),
+        warrantyText: warrantyText.trim(),
+        bankInfo: bankInfo.trim(),
+        notes: notes.trim(),
+        transferFees,
+        includeTransferFees,
+        monthlyInterestRate,
+        installmentsCount,
+        enableFinancing,
+        lastSavedAt: now,
+      };
+
+      try {
+        localStorage.setItem(getAgencyLocalStorageKey(agency.id), JSON.stringify(payload));
+        setLastAutoSavedTime(now);
+      } catch (e) {
+        console.error('Error auto-saving quote settings to localStorage:', e);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [
+    agency.id,
+    isOpen,
+    companyName,
+    companyLogo,
+    companyRuc,
+    companyAddress,
+    companyCity,
+    companyPhone,
+    companyEmail,
+    companyWhatsapp,
+    sellerName,
+    sellerPhone,
+    warrantyText,
+    bankInfo,
+    notes,
+    transferFees,
+    includeTransferFees,
+    monthlyInterestRate,
+    installmentsCount,
+    enableFinancing,
+  ]);
+
+  // Unique quote serial
+  const quoteNumber = useRef(`COT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`).current;
+  const issueDateFormatted = new Date().toLocaleDateString('es-ES', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  // Sync state when car prop changes
+  useEffect(() => {
+    if (car) {
+      setCustomPrice(car.price || 0);
+      setQuoteCurrency(car.currency || 'USD');
+      setDownPaymentAmount(Math.round((car.price || 0) * 0.35));
+    }
+  }, [car]);
 
   // Handle Logo Upload from device
   const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,8 +330,38 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
     }
   };
 
-  // Save Company defaults permanently to App State & LocalStorage
+  // Save Company & Quote template defaults permanently to Agency and LocalStorage
   const handleSaveAgencyDefaults = () => {
+    const now = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const payload: SavedAgencyPdfConfig = {
+      companyName: companyName.trim() || agency.name,
+      companyLogo,
+      companyRuc: companyRuc.trim(),
+      companyAddress: companyAddress.trim(),
+      companyCity: companyCity.trim(),
+      companyPhone: companyPhone.trim(),
+      companyEmail: companyEmail.trim(),
+      companyWhatsapp: companyWhatsapp.trim().replace(/[^0-9]/g, ''),
+      bankInfo: bankInfo.trim(),
+      warrantyText: warrantyText.trim(),
+      sellerName: sellerName.trim(),
+      sellerPhone: sellerPhone.trim(),
+      transferFees: transferFees,
+      includeTransferFees: includeTransferFees,
+      monthlyInterestRate: monthlyInterestRate,
+      installmentsCount: installmentsCount,
+      enableFinancing: enableFinancing,
+      notes: notes.trim(),
+      lastSavedAt: now,
+    };
+
+    try {
+      localStorage.setItem(getAgencyLocalStorageKey(agency.id), JSON.stringify(payload));
+      setLastAutoSavedTime(now);
+    } catch (e) {
+      console.error('Error saving quote settings to localStorage:', e);
+    }
+
     updateAgency(agency.id, {
       name: companyName.trim() || agency.name,
       logoUrl: companyLogo,
@@ -177,9 +373,15 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
       whatsappNumber: companyWhatsapp.trim().replace(/[^0-9]/g, ''),
       bankInfo: bankInfo.trim(),
       defaultWarranty: warrantyText.trim(),
+      defaultSellerName: sellerName.trim(),
+      defaultSellerPhone: sellerPhone.trim(),
+      defaultTransferFees: transferFees,
+      defaultMonthlyInterestRate: monthlyInterestRate,
+      defaultInstallmentsCount: installmentsCount,
+      defaultQuoteNotes: notes.trim(),
     });
     setCompanySavedSuccess(true);
-    setCopiedNotification('¡Datos de la concesionaria guardados con éxito!');
+    setCopiedNotification('¡Plantilla y datos de la concesionaria guardados exitosamente!');
     setTimeout(() => {
       setCompanySavedSuccess(false);
       setCopiedNotification(null);
@@ -189,6 +391,18 @@ export const CarQuotePdfModal: React.FC<CarQuotePdfModalProps> = ({ car, isOpen,
   if (!isOpen || !car) return null;
 
   // Commercial Math
+  const currencySymbol = quoteCurrency === 'PYG' ? 'Gs.' : quoteCurrency === 'EUR' ? '€' : quoteCurrency === 'ARS' ? '$' : 'USD';
+  const formatQuoteMoney = (amount: number) => {
+    if (quoteCurrency === 'PYG') {
+      return `Gs. ${amount.toLocaleString('es-PY')}`;
+    } else if (quoteCurrency === 'EUR') {
+      return `${amount.toLocaleString('es-ES')} €`;
+    } else if (quoteCurrency === 'ARS') {
+      return `$ ${amount.toLocaleString('es-ES')}`;
+    }
+    return `USD ${amount.toLocaleString('es-ES')}`;
+  };
+
   const netVehiclePrice = Math.max(0, customPrice - discountAmount);
   const effectiveTransferFees = includeTransferFees ? transferFees : 0;
   const effectiveTradeIn = enableTradeIn ? tradeInValuation : 0;
@@ -291,21 +505,21 @@ Transmisión: ${car.transmission} | Combustible: ${car.fuelType}
 Color: ${car.color} | Estado: ${car.condition}
 
 --- PROPUESTA COMERCIAL ---
-Precio de Lista: ${car.currency} ${customPrice.toLocaleString('es-ES')}
-${discountAmount > 0 ? `Descuento Especial: - ${car.currency} ${discountAmount.toLocaleString('es-ES')}\n` : ''}${
-      includeTransferFees ? `Gastos de Transferencia y Gestoría: ${car.currency} ${transferFees.toLocaleString('es-ES')}\n` : ''
+Precio de Lista: ${currencySymbol} ${quoteCurrency === 'PYG' ? customPrice.toLocaleString('es-PY') : customPrice.toLocaleString('es-ES')}
+${discountAmount > 0 ? `Descuento Especial: - ${currencySymbol} ${quoteCurrency === 'PYG' ? discountAmount.toLocaleString('es-PY') : discountAmount.toLocaleString('es-ES')}\n` : ''}${
+      includeTransferFees ? `Gastos de Transferencia y Gestoría: ${currencySymbol} ${quoteCurrency === 'PYG' ? transferFees.toLocaleString('es-PY') : transferFees.toLocaleString('es-ES')}\n` : ''
     }${
       enableTradeIn
-        ? `Toma de Usado (${tradeInMakeModel} ${tradeInYear}): - ${car.currency} ${tradeInValuation.toLocaleString('es-ES')}\n`
+        ? `Toma de Usado (${tradeInMakeModel} ${tradeInYear}): - ${currencySymbol} ${quoteCurrency === 'PYG' ? tradeInValuation.toLocaleString('es-PY') : tradeInValuation.toLocaleString('es-ES')}\n`
         : ''
-    }TOTAL CONTADO A PAGAR: ${car.currency} ${finalCashTotal.toLocaleString('es-ES')}
+    }TOTAL CONTADO A PAGAR: ${currencySymbol} ${quoteCurrency === 'PYG' ? finalCashTotal.toLocaleString('es-PY') : finalCashTotal.toLocaleString('es-ES')}
 
 ${
   enableFinancing
     ? `--- PLAN DE FINANCIACIÓN SUGERIDO ---
-Anticipo / Entrega Inicial: ${car.currency} ${downPaymentAmount.toLocaleString('es-ES')}
-Saldo a Financiar: ${car.currency} ${financedPrincipal.toLocaleString('es-ES')}
-Cuotas: ${installmentsCount} pagos mensuales de ${car.currency} ${monthlyInstallmentAmount.toLocaleString('es-ES')} aprox.
+Anticipo / Entrega Inicial: ${currencySymbol} ${quoteCurrency === 'PYG' ? downPaymentAmount.toLocaleString('es-PY') : downPaymentAmount.toLocaleString('es-ES')}
+Saldo a Financiar: ${currencySymbol} ${quoteCurrency === 'PYG' ? financedPrincipal.toLocaleString('es-PY') : financedPrincipal.toLocaleString('es-ES')}
+Cuotas: ${installmentsCount} pagos mensuales de ${currencySymbol} ${quoteCurrency === 'PYG' ? monthlyInstallmentAmount.toLocaleString('es-PY') : monthlyInstallmentAmount.toLocaleString('es-ES')} aprox.
 `
     : ''
 }
@@ -320,6 +534,81 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
 
     navigator.clipboard.writeText(text);
     setCopiedNotification('¡Texto de cotización copiado al portapapeles!');
+    setTimeout(() => setCopiedNotification(null), 4000);
+  };
+
+  const handleSendWhatsApp = async () => {
+    const cleanClientPhone = clientPhone.replace(/[^0-9]/g, '');
+    const formattedPriceStr = quoteCurrency === 'PYG' ? `${customPrice.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${customPrice.toLocaleString('es-ES')}`;
+    const formattedTotalStr = quoteCurrency === 'PYG' ? `${finalCashTotal.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${finalCashTotal.toLocaleString('es-ES')}`;
+    const formattedDownPayment = quoteCurrency === 'PYG' ? `${downPaymentAmount.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${downPaymentAmount.toLocaleString('es-ES')}`;
+    const formattedMonthly = quoteCurrency === 'PYG' ? `${monthlyInstallmentAmount.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${monthlyInstallmentAmount.toLocaleString('es-ES')}`;
+
+    let msg = `📄 *COTIZACIÓN PROFORMA - ${companyName || agency.name}*\n`;
+    msg += `🔢 *Nº:* ${quoteNumber} | 📅 *Fecha:* ${issueDateFormatted}\n\n`;
+    msg += `👤 *Cliente:* ${clientName || 'Estimado/a Cliente'}\n`;
+    msg += `🚗 *Vehículo:* ${car.title} (${car.year})\n`;
+    msg += `📊 *Kilometraje:* ${car.mileage.toLocaleString('es-ES')} km | Transmisión: ${car.transmission}\n\n`;
+    msg += `💰 *Precio:* ${formattedPriceStr}\n`;
+    if (discountAmount > 0) {
+      msg += `🎁 *Descuento Especial:* -${quoteCurrency === 'PYG' ? `${discountAmount.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${discountAmount.toLocaleString('es-ES')}`}\n`;
+    }
+    if (enableTradeIn) {
+      msg += `🔄 *Toma de Usado (${tradeInMakeModel}):* -${quoteCurrency === 'PYG' ? `${tradeInValuation.toLocaleString('es-PY')} Gs.` : `${currencySymbol} ${tradeInValuation.toLocaleString('es-ES')}`}\n`;
+    }
+    msg += `✅ *TOTAL A PAGAR:* ${formattedTotalStr}\n\n`;
+
+    if (enableFinancing) {
+      msg += `💳 *PLAN DE FINANCIACIÓN:*\n`;
+      msg += `• Entrega / Anticipo: ${formattedDownPayment}\n`;
+      msg += `• Cuotas: ${installmentsCount} pagos de ${formattedMonthly} aprox.\n\n`;
+    }
+
+    msg += `🛡️ *Garantía:* ${warrantyText}\n`;
+    msg += `⏳ *Validez:* Hasta el ${validUntilDate}\n`;
+    msg += `🏦 *Cuentas para reserva:* ${bankInfo}\n\n`;
+    msg += `👨‍💼 *Asesor:* ${sellerName} (${sellerPhone || companyPhone})\n`;
+    msg += `📍 *Ubicación:* ${companyAddress || agency.address}, ${companyCity || agency.city}`;
+
+    const encodedMsg = encodeURIComponent(msg);
+    let whatsappUrl = '';
+    if (cleanClientPhone && cleanClientPhone.length >= 8) {
+      whatsappUrl = `https://wa.me/${cleanClientPhone}?text=${encodedMsg}`;
+    } else {
+      whatsappUrl = `https://api.whatsapp.com/send?text=${encodedMsg}`;
+    }
+
+    // Try Web Share API with PDF file if on supported mobile device
+    if (navigator.share && quoteSheetRef.current && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+      try {
+        const element = quoteSheetRef.current;
+        const canvas = await html2canvas(element, { scale: 1.5, useCORS: true, allowTaint: true, logging: false });
+        const imgData = canvas.toDataURL('image/jpeg', 0.9);
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight);
+        const pdfBlob = pdf.output('blob');
+        const sanitizedCar = `${car.make}_${car.model}`.replace(/[^a-zA-Z0-9]/g, '_');
+        const file = new File([pdfBlob], `Cotizacion_${sanitizedCar}_${quoteNumber}.pdf`, { type: 'application/pdf' });
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: `Cotización ${car.title}`,
+            text: msg,
+            files: [file],
+          });
+          setCopiedNotification('¡Cotización compartida con éxito!');
+          setTimeout(() => setCopiedNotification(null), 4000);
+          return;
+        }
+      } catch (err) {
+        console.log('Falling back to WhatsApp URL:', err);
+      }
+    }
+
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+    setCopiedNotification('¡Abriendo WhatsApp con la cotización formateada!');
     setTimeout(() => setCopiedNotification(null), 4000);
   };
 
@@ -399,14 +688,65 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
               activeTab === 'customize' ? 'block' : 'hidden lg:block'
             }`}
           >
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-blue-700" />
-                <span>Ajustar Datos de la Propuesta & Membrete</span>
-              </h3>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Personalizá los datos de la empresa, el cliente y los valores comerciales en tiempo real.
-              </p>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-blue-700" />
+                    <span>Ajustar Datos de la Propuesta & Membrete</span>
+                  </h3>
+                  <p className="text-slate-500 text-[11px] mt-0.5">
+                    Vinculado a: <strong className="text-slate-700">{agency.name}</strong>
+                  </p>
+                </div>
+              </div>
+
+              {/* Banner informativo de carga automática y guardado con LocalStorage */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-[11px] text-slate-700 leading-relaxed">
+                    <span className="font-bold text-blue-900 flex items-center gap-1.5 mb-1">
+                      <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                      Almacenamiento Local por Concesionaria
+                    </span>
+                    Tus ajustes de membrete, cuentas bancarias, garantía y asesor se guardan automáticamente en tu navegador para <strong>{agency.name}</strong>.
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-slate-500 bg-white/80 px-2.5 py-1.5 rounded-lg border border-blue-100">
+                  <span className="flex items-center gap-1.5 font-medium text-emerald-700">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Auto-guardado activo en este dispositivo
+                  </span>
+                  {lastAutoSavedTime && (
+                    <span className="font-mono text-slate-400">
+                      Último guardado: {lastAutoSavedTime}
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveAgencyDefaults}
+                  className={`w-full py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs ${
+                    companySavedSuccess
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-blue-700 hover:bg-blue-800 text-white'
+                  }`}
+                >
+                  {companySavedSuccess ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      <span>¡Plantilla guardada como predeterminada!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>💾 Guardar Cambios como Plantilla por Defecto</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* 0. DEALERSHIP / COMPANY PROFILE CUSTOMIZATION */}
@@ -603,32 +943,100 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
 
             {/* 2. Commercial Pricing & Discounts */}
             <div className="bg-white p-3.5 rounded-2xl border border-slate-200 space-y-2.5 shadow-sm">
-              <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                Precio y Descuentos ({car.currency})
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  Precio y Moneda ({currencySymbol})
+                </span>
+                <select
+                  value={quoteCurrency}
+                  onChange={(e) => {
+                    const newCurr = e.target.value as CurrencyCode;
+                    if (newCurr === 'PYG' && quoteCurrency === 'USD' && customPrice < 500000) {
+                      const converted = Math.round((customPrice * 7900) / 1000000) * 1000000 || 85000000;
+                      setCustomPrice(converted);
+                      setDownPaymentAmount(Math.round(converted * 0.35));
+                    } else if (newCurr === 'USD' && quoteCurrency === 'PYG' && customPrice >= 1000000) {
+                      const converted = Math.round(customPrice / 7900);
+                      setCustomPrice(converted);
+                      setDownPaymentAmount(Math.round(converted * 0.35));
+                    }
+                    setQuoteCurrency(newCurr);
+                  }}
+                  className="bg-slate-50 text-slate-900 font-bold border border-slate-200 rounded-xl px-2.5 py-1 text-xs focus:outline-none focus:border-blue-500"
+                >
+                  <option value="USD">USD ($)</option>
+                  <option value="PYG">Gs. (PYG)</option>
+                  <option value="ARS">ARS ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                </select>
+              </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Precio Base</label>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Precio Base ({currencySymbol})</label>
                   <input
-                    type="number"
-                    value={customPrice}
-                    onChange={(e) => setCustomPrice(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-900"
+                    type="text"
+                    inputMode="numeric"
+                    value={customPrice ? formatNumberWithDots(customPrice) : ''}
+                    onChange={(e) => setCustomPrice(parseNumberFromFormatted(e.target.value))}
+                    placeholder={quoteCurrency === 'PYG' ? 'Ej. 85.000.000' : '0'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-900 font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Descuento Especial</label>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Descuento Especial ({currencySymbol})</label>
                   <input
-                    type="number"
-                    value={discountAmount}
-                    onChange={(e) => setDiscountAmount(Number(e.target.value))}
+                    type="text"
+                    inputMode="numeric"
+                    value={discountAmount ? formatNumberWithDots(discountAmount) : ''}
+                    onChange={(e) => setDiscountAmount(parseNumberFromFormatted(e.target.value))}
                     placeholder="0"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-rose-600 font-semibold"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-rose-600 font-semibold font-mono"
                   />
                 </div>
               </div>
+
+              {/* Unidad de Millón shortcuts para cotización en Guaraníes */}
+              {quoteCurrency === 'PYG' && (
+                <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-blue-900 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-blue-600" />
+                      Unidad de Millón (2 puntos entre los 6 ceros):
+                    </span>
+                    <span className="font-mono font-black text-blue-900 bg-white px-2 py-0.5 rounded border border-blue-200">
+                      Gs. {formatNumberWithDots(customPrice)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCustomPrice((prev) => (prev || 0) + 10_000_000)}
+                      className="px-2 py-0.5 bg-white hover:bg-blue-100 text-blue-800 text-[10px] font-bold rounded border border-blue-300 shadow-2xs"
+                    >
+                      +10 Millones
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomPrice((prev) => (prev || 0) + 50_000_000)}
+                      className="px-2 py-0.5 bg-white hover:bg-blue-100 text-blue-800 text-[10px] font-bold rounded border border-blue-300 shadow-2xs"
+                    >
+                      +50 Millones
+                    </button>
+                    {[65000000, 85000000, 120000000, 160000000].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setCustomPrice(preset)}
+                        className="px-2 py-0.5 bg-white hover:bg-slate-100 text-slate-700 text-[10px] font-mono rounded border border-slate-300"
+                      >
+                        {formatNumberWithDots(preset)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="pt-1 flex items-center justify-between">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -642,12 +1050,13 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                 </label>
                 {includeTransferFees && (
                   <div className="flex items-center gap-1">
-                    <span className="text-[11px] text-slate-500">{car.currency}</span>
+                    <span className="text-[11px] text-slate-500">{currencySymbol}</span>
                     <input
-                      type="number"
-                      value={transferFees}
-                      onChange={(e) => setTransferFees(Number(e.target.value))}
-                      className="w-20 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-900"
+                      type="text"
+                      inputMode="numeric"
+                      value={transferFees ? formatNumberWithDots(transferFees) : ''}
+                      onChange={(e) => setTransferFees(parseNumberFromFormatted(e.target.value))}
+                      className="w-24 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-900 font-mono font-semibold"
                     />
                   </div>
                 )}
@@ -694,13 +1103,15 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        Tasación ({car.currency})
+                        Tasación ({currencySymbol})
                       </label>
                       <input
-                        type="number"
-                        value={tradeInValuation}
-                        onChange={(e) => setTradeInValuation(Number(e.target.value))}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-emerald-700"
+                        type="text"
+                        inputMode="numeric"
+                        value={tradeInValuation ? formatNumberWithDots(tradeInValuation) : ''}
+                        onChange={(e) => setTradeInValuation(parseNumberFromFormatted(e.target.value))}
+                        placeholder={quoteCurrency === 'PYG' ? 'Ej. 35.000.000' : '0'}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-emerald-700 font-mono"
                       />
                     </div>
                   </div>
@@ -728,13 +1139,15 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        Anticipo Inicial ({car.currency})
+                        Anticipo Inicial ({currencySymbol})
                       </label>
                       <input
-                        type="number"
-                        value={downPaymentAmount}
-                        onChange={(e) => setDownPaymentAmount(Number(e.target.value))}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900"
+                        type="text"
+                        inputMode="numeric"
+                        value={downPaymentAmount ? formatNumberWithDots(downPaymentAmount) : ''}
+                        onChange={(e) => setDownPaymentAmount(parseNumberFromFormatted(e.target.value))}
+                        placeholder={quoteCurrency === 'PYG' ? 'Ej. 30.000.000' : '0'}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900 font-mono"
                       />
                     </div>
                     <div>
@@ -758,7 +1171,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                     <div>
                       <span className="text-[10px] uppercase font-bold text-indigo-700 block">Cuota Mensual Estimada</span>
                       <span className="text-sm font-black text-indigo-950">
-                        {car.currency} {monthlyInstallmentAmount.toLocaleString('es-ES')} / mes
+                        {currencySymbol} {quoteCurrency === 'PYG' ? monthlyInstallmentAmount.toLocaleString('es-PY') : monthlyInstallmentAmount.toLocaleString('es-ES')} / mes
                       </span>
                     </div>
                     <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded-lg border border-indigo-200 font-semibold">
@@ -817,6 +1230,30 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900"
                 />
               </div>
+
+              <div className="pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={handleSaveAgencyDefaults}
+                  className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm ${
+                    companySavedSuccess
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-900 hover:bg-blue-700 text-white'
+                  }`}
+                >
+                  {companySavedSuccess ? (
+                    <>
+                      <Check className="w-4 h-4 stroke-[3]" />
+                      <span>¡Plantilla guardada para futuros PDFs!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>💾 Guardar Plantilla Predeterminada de {agency.name}</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Quick switch to preview on mobile */}
@@ -860,6 +1297,15 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Imprimir</span>
+                </button>
+
+                <button
+                  onClick={handleSendWhatsApp}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-all active:scale-98"
+                  title="Enviar propuesta por WhatsApp"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
                 </button>
 
                 <button
@@ -996,7 +1442,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                   <thead>
                     <tr className="bg-slate-100 text-slate-700 border-y border-slate-300">
                       <th className="py-1.5 px-3 text-left font-bold">Concepto Comercial</th>
-                      <th className="py-1.5 px-3 text-right font-bold">Importe ({car.currency})</th>
+                      <th className="py-1.5 px-3 text-right font-bold">Importe ({currencySymbol})</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -1005,7 +1451,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                         Valor de Lista Vehículo ({car.make} {car.model} {car.year})
                       </td>
                       <td className="py-2 px-3 text-right font-semibold text-slate-900">
-                        {car.currency} {customPrice.toLocaleString('es-ES')}
+                        {currencySymbol} {quoteCurrency === 'PYG' ? customPrice.toLocaleString('es-PY') : customPrice.toLocaleString('es-ES')}
                       </td>
                     </tr>
 
@@ -1015,7 +1461,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                           Bonificación Comercial / Descuento Especial
                         </td>
                         <td className="py-1.5 px-3 text-right font-bold">
-                          - {car.currency} {discountAmount.toLocaleString('es-ES')}
+                          - {currencySymbol} {quoteCurrency === 'PYG' ? discountAmount.toLocaleString('es-PY') : discountAmount.toLocaleString('es-ES')}
                         </td>
                       </tr>
                     )}
@@ -1026,7 +1472,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                           Gastos Estimados de Transferencia, Certificados y Gestoría
                         </td>
                         <td className="py-1.5 px-3 text-right font-semibold text-slate-900">
-                          + {car.currency} {transferFees.toLocaleString('es-ES')}
+                          + {currencySymbol} {quoteCurrency === 'PYG' ? transferFees.toLocaleString('es-PY') : transferFees.toLocaleString('es-ES')}
                         </td>
                       </tr>
                     )}
@@ -1037,7 +1483,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                           Toma de Usado en Parte de Pago: {tradeInMakeModel} ({tradeInYear})
                         </td>
                         <td className="py-1.5 px-3 text-right font-bold">
-                          - {car.currency} {tradeInValuation.toLocaleString('es-ES')}
+                          - {currencySymbol} {quoteCurrency === 'PYG' ? tradeInValuation.toLocaleString('es-PY') : tradeInValuation.toLocaleString('es-ES')}
                         </td>
                       </tr>
                     )}
@@ -1045,7 +1491,7 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                     <tr className="bg-slate-900 text-white font-black text-sm">
                       <td className="py-2.5 px-3">SALDO FINAL CONTADO A PAGAR</td>
                       <td className="py-2.5 px-3 text-right text-amber-400">
-                        {car.currency} {finalCashTotal.toLocaleString('es-ES')}
+                        {currencySymbol} {quoteCurrency === 'PYG' ? finalCashTotal.toLocaleString('es-PY') : finalCashTotal.toLocaleString('es-ES')}
                       </td>
                     </tr>
                   </tbody>
@@ -1069,19 +1515,19 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
                     <div className="bg-white p-2 rounded-lg border border-blue-100">
                       <span className="text-slate-400 text-[10px] block">Anticipo / Entrega</span>
                       <strong className="text-slate-900 font-bold">
-                        {car.currency} {downPaymentAmount.toLocaleString('es-ES')}
+                        {currencySymbol} {quoteCurrency === 'PYG' ? downPaymentAmount.toLocaleString('es-PY') : downPaymentAmount.toLocaleString('es-ES')}
                       </strong>
                     </div>
                     <div className="bg-white p-2 rounded-lg border border-blue-100">
                       <span className="text-slate-400 text-[10px] block">Saldo Financiado</span>
                       <strong className="text-slate-900 font-bold">
-                        {car.currency} {financedPrincipal.toLocaleString('es-ES')}
+                        {currencySymbol} {quoteCurrency === 'PYG' ? financedPrincipal.toLocaleString('es-PY') : financedPrincipal.toLocaleString('es-ES')}
                       </strong>
                     </div>
                     <div className="bg-blue-700 text-white p-2 rounded-lg shadow-sm">
                       <span className="text-blue-200 text-[10px] block font-semibold">Valor Cuota Aprox.</span>
                       <strong className="text-white font-black">
-                        {car.currency} {monthlyInstallmentAmount.toLocaleString('es-ES')} / mes
+                        {currencySymbol} {quoteCurrency === 'PYG' ? monthlyInstallmentAmount.toLocaleString('es-PY') : monthlyInstallmentAmount.toLocaleString('es-ES')} / mes
                       </strong>
                     </div>
                   </div>
@@ -1136,12 +1582,20 @@ ${agency.name} • ${agency.address}, ${agency.city}`;
             <span>Formato Proforma Estándar Internacional homologado por {companyName || agency.name}</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-semibold transition-colors"
+              className="px-4 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-semibold transition-colors"
             >
               Cerrar
+            </button>
+
+            <button
+              onClick={handleSendWhatsApp}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-md transition-all active:scale-98"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>Enviar por WhatsApp</span>
             </button>
 
             <button
